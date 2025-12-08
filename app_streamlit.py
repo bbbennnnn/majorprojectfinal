@@ -12,9 +12,7 @@ from core.file_operations import (
     extract_text_from_pptx,
 )
 
-# --------------------------
-# Helper functions
-# --------------------------
+# Helper functions//
 
 TEXT_EXTRACTORS = {
     "PDF": extract_text_from_pdf,
@@ -64,14 +62,12 @@ def extract_text(path, doc_type):
         return extractor(path)
     return ""
 
-# --------------------------
-# Streamlit UI
-# --------------------------
+# Streamlit ui//
 
 st.set_page_config(page_title="Document Similarity Checker", layout="wide")
-st.title("📄 Document Similarity Checker (Folder → Uploaded Document)")
+st.title("📄 Document Plagarism Checker")
 
-# Sidebar
+# Sidebar//
 st.sidebar.header("Settings")
 doc_type = st.sidebar.radio("Select document type:", ["PDF", "DOCX", "PPTX"])
 default_dir = r"C:\Users\Benson\Documents\plagiarism_checker_final\sample_pdfs"
@@ -79,9 +75,8 @@ directory = st.sidebar.text_input("Folder path to scan:", value=default_dir)
 sentence_threshold = st.sidebar.slider("Sentence match threshold", 0.30, 0.85, 0.55, 0.01)
 top_n = st.sidebar.number_input("Show top N matches", min_value=1, max_value=5, value=3, step=1)
 
-# --------------------------
-# Scan folder
-# --------------------------
+# Scan folder//
+
 def scan_folder():
     all_files = list_files_by_type(directory, doc_type) if os.path.exists(directory) else []
     documents = [{"path": f, "text": extract_text(f, doc_type)} for f in all_files]
@@ -94,16 +89,15 @@ if st.sidebar.button("Scan folder"):
         documents = scan_folder()
     st.sidebar.success(f"Scanned {len(documents)} {doc_type} documents with text.")
 
-# Auto-load cached scan
+# Auto-load cached scan//
 if "doc_data" not in st.session_state:
     st.session_state["doc_data"] = scan_folder()
 
 doc_data = st.session_state["doc_data"]
 st.write(f"Scanned {len(doc_data)} {doc_type} documents with text.")
 
-# --------------------------
-# Upload file
-# --------------------------
+# Upload file//
+
 st.sidebar.header(f"Upload a {doc_type} to check")
 uploaded_file = st.sidebar.file_uploader(f"Upload {doc_type} file", type=[doc_type.lower()])
 save_to_folder = st.sidebar.checkbox(f"Save uploaded {doc_type} to folder?")
@@ -118,19 +112,18 @@ if uploaded_file:
     st.sidebar.success(f"Saved uploaded file temporarily to {tmp_path}")
     uploaded_text = extract_text(tmp_path, doc_type)
 
-    # Save to folder if checked
+    # Save to folder if checked//
     if save_to_folder:
         dest_path = os.path.join(directory, uploaded_file.name)
         with open(dest_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
         st.sidebar.success(f"Uploaded file saved to folder: {dest_path}")
-        # Rescan folder to include the new file
+        # Rescan folder to include the new file//
         doc_data = scan_folder()
         st.session_state["doc_data"] = doc_data
 
-# --------------------------
-# Comparison
-# --------------------------
+# Comparison//
+
 if uploaded_file and uploaded_text.strip() and len(doc_data) > 0:
     st.header("🔗 Document-level similarity (uploaded → folder)")
 
@@ -153,7 +146,7 @@ if uploaded_file and uploaded_text.strip() and len(doc_data) > 0:
 
     st.dataframe(df_scores.head(top_n).style.format({"similarity":"{:.4f}"}))
 
-    # Side-by-side highlighting for top N matches
+    # Side-by-side highlighting for top N matches//
     for idx in range(min(top_n, len(df_scores))):
         top_name = df_scores.loc[idx, "filename"]
         top_score = df_scores.loc[idx, "similarity"]
@@ -165,7 +158,7 @@ if uploaded_file and uploaded_text.strip() and len(doc_data) > 0:
                 top_text = d["text"]
                 break
 
-        # Sentence-level similarity
+        # Sentence-level similarity//
         uploaded_sentences = split_into_sentences(uploaded_text)
         top_sentences = split_into_sentences(top_text)
 
@@ -180,19 +173,19 @@ if uploaded_file and uploaded_text.strip() and len(doc_data) > 0:
 
             sent_cosine = cosine_similarity(uploaded_mat, top_mat)
 
-            # Best match per uploaded sentence
+            # Best match per uploaded sentence//
             best_matches = {}
             for i, s in enumerate(uploaded_sentences):
                 best_j = sent_cosine[i].argmax()
                 best_matches[s] = float(sent_cosine[i, best_j])
 
-            # Best scores per top_doc sentence
+            # Best scores per top_doc sentence//
             top_doc_scores = {}
             for j, ts in enumerate(top_sentences):
                 best_i = sent_cosine[:, j].argmax()
                 top_doc_scores[ts] = float(sent_cosine[best_i, j])
 
-            # Show side-by-side highlighted paragraphs
+            # Show side-by-side highlighted paragraphs//
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown("**Uploaded document**")

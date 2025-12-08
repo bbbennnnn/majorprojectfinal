@@ -4,9 +4,9 @@ from PyPDF2 import PdfReader
 from docx import Document
 from pptx import Presentation
 
-# -----------------------------------
-# CLEAN TEXT
-# -----------------------------------
+
+#text cleaning//
+
 def clean_text(text):
     """Basic cleaning to normalize extracted text."""
     if not text:
@@ -16,9 +16,9 @@ def clean_text(text):
     return text.strip()
 
 
-# -----------------------------------
-# PDF SCANNING (RECURSIVE)
-# -----------------------------------
+
+#pdf recusive scan//
+
 def list_pdf_files_recursively(folder_path):
     """
     Recursively scans a folder and returns all PDF file paths.
@@ -33,9 +33,9 @@ def list_pdf_files_recursively(folder_path):
     return pdf_files
 
 
-# -----------------------------------
-# PDF TEXT EXTRACTION
-# -----------------------------------
+
+#pdf text extraction//
+
 def extract_text_from_pdf(pdf_path):
     """Extract text from a PDF file."""
     try:
@@ -54,9 +54,9 @@ def extract_text_from_pdf(pdf_path):
         return ""
 
 
-# -----------------------------------
-# DOCX TEXT EXTRACTION
-# -----------------------------------
+
+#docx text extraction//
+
 def extract_text_from_docx(docx_path):
     """Extract text from a DOCX file."""
     try:
@@ -69,9 +69,9 @@ def extract_text_from_docx(docx_path):
         return ""
 
 
-# -----------------------------------
-# PPTX TEXT EXTRACTION
-# -----------------------------------
+
+#pptx text extraction//
+
 def extract_text_from_pptx(pptx_path):
     """Extract text from PPTX slides."""
     try:
@@ -90,9 +90,8 @@ def extract_text_from_pptx(pptx_path):
         return ""
 
 
-# -----------------------------------
-# EXTRACT ALL PDFs IN FOLDER
-# -----------------------------------
+# Extract all pdfs in folder//
+
 def extract_pdfs_into_list(folder_path):
     """
     Returns list of dicts: [{path: "", text: ""}, ...]
