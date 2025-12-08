@@ -8,3 +8,4 @@ seaborn
 pymupdf
 scikit-image
 python-docx
+python-pptx
