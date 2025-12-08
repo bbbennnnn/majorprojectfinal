@@ -139,7 +139,7 @@ if uploaded_file:
 # Document Comparison
 # -----------------------------
 if uploaded_file and uploaded_text.strip() and len(doc_data) > 0:
-    st.header("🔗 Document-level similarity (uploaded → folder)")
+    st.header("🔗 Document-level similarity")
 
     corpus_texts = [d["text"] for d in doc_data]
     corpus_names = [os.path.basename(d["path"]) for d in doc_data]
