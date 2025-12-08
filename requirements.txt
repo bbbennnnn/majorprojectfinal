@@ -1,0 +1,9 @@
+matplotlib
+nltk==3.9.1
+scikit_learn
+sentence_transformers
+streamlit==1.40.0
+PyPDF2
+seaborn
+pymupdf
+scikit_image
