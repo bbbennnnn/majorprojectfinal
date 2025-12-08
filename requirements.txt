@@ -9,3 +9,4 @@ pymupdf
 scikit-image
 python-docx
 python-pptx
+opencv-python
