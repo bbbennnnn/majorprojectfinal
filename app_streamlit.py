@@ -12,9 +12,9 @@ from core.file_operations import (
     extract_text_from_pptx,
 )
 
-# -------------------------
+# -----------------------
 # Helper functions
-# -------------------------
+# -----------------------
 
 TEXT_EXTRACTORS = {
     "PDF": extract_text_from_pdf,
@@ -35,7 +35,7 @@ def split_into_sentences(text):
     return [s.strip() for s in sentences if len(s.strip()) > 20]
 
 def escape_html(s):
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
 def render_highlighted_html(raw_text, matched_sentence_scores, threshold=0.55):
     sentences = split_into_sentences(raw_text)
@@ -44,7 +44,11 @@ def render_highlighted_html(raw_text, matched_sentence_scores, threshold=0.55):
         score = matched_sentence_scores.get(s, 0)
         esc = escape_html(s)
         if score >= threshold:
-            parts.append(f"<mark>{esc}</mark> <small>({score:.2f})</small>")
+            # Bright cyan highlight with bold black text and padding
+            parts.append(
+                f'<span style="background-color: #00FFFF; color: black; font-weight: bold; padding:2px 4px; border-radius:3px;">{esc}</span> '
+                f'<small>({score:.2f})</small>'
+            )
         else:
             parts.append(esc)
     return "<br><br>".join(parts)
@@ -64,42 +68,50 @@ def extract_text(path, doc_type):
         return extractor(path)
     return ""
 
-def scan_folder(folder_path, doc_type):
-    os.makedirs(folder_path, exist_ok=True)  # ensure folder exists
-    all_files = list_files_by_type(folder_path, doc_type)
+# -----------------------
+# Streamlit UI
+# -----------------------
+
+st.set_page_config(page_title="Document Similarity Checker", layout="wide")
+st.title("📄 Document Plagiarism Checker")
+
+# Sidebar settings
+st.sidebar.header("Settings")
+doc_type = st.sidebar.radio("Select document type:", ["PDF", "DOCX", "PPTX"])
+default_dir = r"C:\Users\Benson\Documents\plagiarism_checker_final\sample_pdfs"
+directory = st.sidebar.text_input("Folder path to scan:", value=default_dir)
+sentence_threshold = st.sidebar.slider("Sentence match threshold", 0.30, 0.85, 0.55, 0.01)
+top_n = st.sidebar.number_input("Show top N matches", min_value=1, max_value=5, value=3, step=1)
+
+# -----------------------
+# Folder scanning
+# -----------------------
+
+def scan_folder():
+    if not os.path.exists(directory):
+        return []
+    all_files = list_files_by_type(directory, doc_type)
     documents = [{"path": f, "text": extract_text(f, doc_type)} for f in all_files]
     documents = [d for d in documents if d["text"].strip()]
     st.session_state["doc_data"] = documents
     return documents
 
-# -------------------------
-# Streamlit UI
-# -------------------------
-
-st.set_page_config(page_title="Document Similarity Checker", layout="wide")
-st.title("📄 Document Plagiarism Checker")
-
-# Sidebar
-st.sidebar.header("Settings")
-doc_type = st.sidebar.radio("Select document type:", ["PDF", "DOCX", "PPTX"])
-default_dir = "sample_pdfs"  # use relative path for Streamlit Cloud
-directory = st.sidebar.text_input("Folder path to scan:", value=default_dir)
-sentence_threshold = st.sidebar.slider("Sentence match threshold", 0.30, 0.85, 0.55, 0.01)
-top_n = st.sidebar.number_input("Show top N matches", min_value=1, max_value=5, value=3, step=1)
-
 if st.sidebar.button("Scan folder"):
     with st.spinner(f"Scanning {doc_type} files recursively..."):
-        documents = scan_folder(directory, doc_type)
+        documents = scan_folder()
     st.sidebar.success(f"Scanned {len(documents)} {doc_type} documents with text.")
 
 # Auto-load cached scan
 if "doc_data" not in st.session_state:
-    st.session_state["doc_data"] = scan_folder(directory, doc_type)
+    st.session_state["doc_data"] = scan_folder()
 
 doc_data = st.session_state["doc_data"]
 st.write(f"Scanned {len(doc_data)} {doc_type} documents with text.")
 
-# Upload file
+# -----------------------
+# File upload
+# -----------------------
+
 st.sidebar.header(f"Upload a {doc_type} to check")
 uploaded_file = st.sidebar.file_uploader(f"Upload {doc_type} file", type=[doc_type.lower()])
 save_to_folder = st.sidebar.checkbox(f"Save uploaded {doc_type} to folder?")
@@ -114,16 +126,19 @@ if uploaded_file:
     st.sidebar.success(f"Saved uploaded file temporarily to {tmp_path}")
     uploaded_text = extract_text(tmp_path, doc_type)
 
-    if save_to_folder:
-        os.makedirs(directory, exist_ok=True)
+    # Save uploaded file to folder if checked
+    if save_to_folder and os.path.exists(directory):
         dest_path = os.path.join(directory, uploaded_file.name)
         with open(dest_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
         st.sidebar.success(f"Uploaded file saved to folder: {dest_path}")
-        doc_data = scan_folder(directory, doc_type)
+        doc_data = scan_folder()  # Rescan folder to include the new file
         st.session_state["doc_data"] = doc_data
 
+# -----------------------
 # Comparison
+# -----------------------
+
 if uploaded_file and uploaded_text.strip() and len(doc_data) > 0:
     st.header("🔗 Document-level similarity (uploaded → folder)")
 
@@ -144,14 +159,19 @@ if uploaded_file and uploaded_text.strip() and len(doc_data) > 0:
         "similarity": cosine_with_uploaded
     }).sort_values("similarity", ascending=False).reset_index(drop=True)
 
-    st.dataframe(df_scores.head(top_n).style.format({"similarity": "{:.4f}"}))
+    st.dataframe(df_scores.head(top_n).style.format({"similarity":"{:.4f}"}))
 
+    # Side-by-side highlighting for top N matches
     for idx in range(min(top_n, len(df_scores))):
         top_name = df_scores.loc[idx, "filename"]
         top_score = df_scores.loc[idx, "similarity"]
         st.subheader(f"Top {idx+1} match: {top_name} — score {top_score:.3f}")
 
-        top_text = next((d["text"] for d in doc_data if os.path.basename(d["path"]) == top_name), "")
+        top_text = ""
+        for d in doc_data:
+            if os.path.basename(d["path"]) == top_name:
+                top_text = d["text"]
+                break
 
         uploaded_sentences = split_into_sentences(uploaded_text)
         top_sentences = split_into_sentences(top_text)
@@ -167,7 +187,8 @@ if uploaded_file and uploaded_text.strip() and len(doc_data) > 0:
 
             sent_cosine = cosine_similarity(uploaded_mat, top_mat)
 
-            best_matches = {uploaded_sentences[i]: float(sent_cosine[i].argmax()) for i in range(m)}
+            # Best match per uploaded sentence
+            best_matches = {uploaded_sentences[i]: float(sent_cosine[i].argmax(axis=None)) for i in range(len(uploaded_sentences))}
             top_doc_scores = {top_sentences[j]: float(sent_cosine[:, j].max()) for j in range(len(top_sentences))}
 
             col1, col2 = st.columns(2)
