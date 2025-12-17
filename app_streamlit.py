@@ -12,9 +12,8 @@ from core.file_operations import (
     extract_text_from_pptx,
 )
 
-# -----------------------------
-# Config
-# -----------------------------
+#Config - Streamlit ui//
+
 st.set_page_config(page_title="Document Similarity Checker", layout="wide")
 st.title("📄 Document Plagiarism Checker")
 
@@ -30,9 +29,8 @@ FILE_EXTENSIONS = {
     "PPTX": ".pptx",
 }
 
-# -----------------------------
-# Helper Functions
-# -----------------------------
+#Helper Functions//
+
 def split_into_sentences(text):
     if not text:
         return []
@@ -49,7 +47,7 @@ def render_highlighted_html(raw_text, matched_sentence_scores, threshold=0.55):
         score = matched_sentence_scores.get(s, 0)
         esc = escape_html(s)
         if score >= threshold:
-            # Brighter highlight
+            #Brighter highlight//
             parts.append(f"<span style='background-color: #ffeb3b; color: #000; font-weight:bold'>{esc}</span> <small>({score:.2f})</small>")
         else:
             parts.append(esc)
@@ -82,9 +80,8 @@ def scan_folder(directory, doc_type):
     st.session_state["doc_data"] = documents
     return documents
 
-# -----------------------------
-# Sidebar
-# -----------------------------
+#Sidebar//
+
 st.sidebar.header("Settings")
 doc_type = st.sidebar.radio("Select document type:", ["PDF", "DOCX", "PPTX"])
 default_dir = os.path.join(os.getcwd(), "sample_pdfs")
@@ -92,9 +89,9 @@ directory = st.sidebar.text_input("Folder path to scan:", value=default_dir)
 sentence_threshold = st.sidebar.slider("Sentence match threshold", 0.30, 0.85, 0.55, 0.01)
 top_n = st.sidebar.number_input("Show top N matches", min_value=1, max_value=5, value=3, step=1)
 
-# -----------------------------
-# Scan Folder
-# -----------------------------
+
+#Folder scanning//
+
 if "doc_data" not in st.session_state:
     st.session_state["doc_data"] = scan_folder(directory, doc_type)
 
@@ -107,9 +104,9 @@ else:
 
 st.write(f"Found {len(doc_data)} {doc_type} documents in folder.")
 
-# -----------------------------
-# Upload File
-# -----------------------------
+
+#File upload//
+
 st.sidebar.header(f"Upload a {doc_type} to check")
 uploaded_file = st.sidebar.file_uploader(f"Upload {doc_type} file", type=[doc_type.lower()])
 save_to_folder = st.sidebar.checkbox(f"Save uploaded {doc_type} to folder?")
@@ -131,13 +128,12 @@ if uploaded_file:
         with open(dest_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
         st.sidebar.success(f"Uploaded file saved to folder: {dest_path}")
-        # Rescan folder after saving
+        #Rescan folder after saving//
         doc_data = scan_folder(directory, doc_type)
         st.session_state["doc_data"] = doc_data
 
-# -----------------------------
-# Document Comparison
-# -----------------------------
+#Document comparison//
+
 if uploaded_file and uploaded_text.strip() and len(doc_data) > 0:
     st.header("🔗 Document-level similarity")
 
@@ -160,7 +156,7 @@ if uploaded_file and uploaded_text.strip() and len(doc_data) > 0:
 
     st.dataframe(df_scores.head(top_n).style.format({"similarity":"{:.4f}"}))
 
-    # Sentence-level comparison
+    #Sentence-level comparison//
     for idx in range(min(top_n, len(df_scores))):
         top_name = df_scores.loc[idx, "filename"]
         top_score = df_scores.loc[idx, "similarity"]
