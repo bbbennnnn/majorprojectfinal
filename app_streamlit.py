@@ -1,196 +1,268 @@
 import streamlit as st
-import os
-import re
-import tempfile
+import os, re, zipfile, tempfile
+import fitz
+import docx
+import numpy as np
 import pandas as pd
+from PIL import Image
+import imagehash
+from io import BytesIO
+
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from core.file_operations import extract_text_from_pdf
 
-from core.file_operations import (
-    extract_text_from_pdf,
-    extract_text_from_docx,
-    extract_text_from_pptx,
-)
 
-#Config - Streamlit ui//
+#text utilities
 
-st.set_page_config(page_title="Document Similarity Checker", layout="wide")
-st.title("📄 Document Plagiarism Checker")
 
-TEXT_EXTRACTORS = {
-    "PDF": extract_text_from_pdf,
-    "DOCX": extract_text_from_docx,
-    "PPTX": extract_text_from_pptx,
-}
-
-FILE_EXTENSIONS = {
-    "PDF": ".pdf",
-    "DOCX": ".docx",
-    "PPTX": ".pptx",
-}
-
-#Helper Functions//
-
-def split_into_sentences(text):
-    if not text:
+def split_sentences(text):
+    if not isinstance(text, str):
         return []
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    return [s.strip() for s in sentences if len(s.strip()) > 20]
+    return [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if len(s.strip()) > 20]
 
-def escape_html(s):
-    return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+def normalize(s):
+    return re.sub(r"\s+", " ", s.lower().strip())
 
-def render_highlighted_html(raw_text, matched_sentence_scores, threshold=0.55):
-    sentences = split_into_sentences(raw_text)
-    parts = []
-    for s in sentences:
-        score = matched_sentence_scores.get(s, 0)
-        esc = escape_html(s)
+def remove_template_text(text, template_text):
+    if not template_text:
+        return text
+    template_set = set(normalize(s) for s in split_sentences(template_text))
+    return " ".join(s for s in split_sentences(text) if normalize(s) not in template_set)
+
+def highlight_html(text, scores, threshold):
+    out = []
+    for s in split_sentences(text):
+        score = scores.get(s, 0)
+        esc = s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
         if score >= threshold:
-            #Brighter highlight//
-            parts.append(f"<span style='background-color: #ffeb3b; color: #000; font-weight:bold'>{esc}</span> <small>({score:.2f})</small>")
+            out.append(
+                f"<span style='background:#ffeb3b;font-weight:bold'>{esc}</span>"
+                f"<small> ({round(score*100,1)}%)</small>"
+            )
         else:
-            parts.append(esc)
-    return "<br><br>".join(parts)
+            out.append(esc)
+    return "<br><br>".join(out)
 
-def list_files_by_type(folder_path, file_type):
-    ext = FILE_EXTENSIONS[file_type].lower()
-    results = []
-    for root, _, files in os.walk(folder_path):
-        for f in files:
-            if f.lower().endswith(ext):
-                results.append(os.path.join(root, f))
-    return results
-
-def extract_text(path, doc_type):
-    extractor = TEXT_EXTRACTORS.get(doc_type)
-    if extractor:
-        return extractor(path)
-    return ""
-
-def scan_folder(directory, doc_type):
-    if not os.path.exists(directory):
-        os.makedirs(directory, exist_ok=True)
-    all_files = list_files_by_type(directory, doc_type)
-    documents = []
-    for f in all_files:
-        text = extract_text(f, doc_type)
-        if text.strip():
-            documents.append({"path": f, "text": text})
-    st.session_state["doc_data"] = documents
-    return documents
-
-#Sidebar//
-
-st.sidebar.header("Settings")
-doc_type = st.sidebar.radio("Select document type:", ["PDF", "DOCX", "PPTX"])
-default_dir = os.path.join(os.getcwd(), "sample_pdfs")
-directory = st.sidebar.text_input("Folder path to scan:", value=default_dir)
-sentence_threshold = st.sidebar.slider("Sentence match threshold", 0.30, 0.85, 0.55, 0.01)
-top_n = st.sidebar.number_input("Show top N matches", min_value=1, max_value=5, value=3, step=1)
+#image extraction
 
 
-#Folder scanning//
+def extract_images_from_pdf(path):
+    images = []
+    doc = fitz.open(path)
 
-if "doc_data" not in st.session_state:
-    st.session_state["doc_data"] = scan_folder(directory, doc_type)
+    for page in doc:
+        for img in page.get_images(full=True):
+            pix = fitz.Pixmap(doc, img[0])
+            if pix.n > 3:
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+            try:
+                pil = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                images.append({
+                    "hash": imagehash.phash(pil),
+                    "image": pil
+                })
+            except:
+                pass
+    return images
 
-if st.sidebar.button("Scan folder"):
-    with st.spinner(f"Scanning {doc_type} files in folder..."):
-        doc_data = scan_folder(directory, doc_type)
-    st.sidebar.success(f"Scanned {len(doc_data)} {doc_type} documents.")
-else:
-    doc_data = st.session_state.get("doc_data", [])
+def extract_images_from_docx(path):
+    images = []
+    d = docx.Document(path)
 
-st.write(f"Found {len(doc_data)} {doc_type} documents in folder.")
+    for rel in d.part._rels.values():
+        if "image" in rel.reltype:
+            img_bytes = rel.target_part.blob
+            try:
+                pil = Image.open(BytesIO(img_bytes)).convert("RGB")
+                images.append({
+                    "hash": imagehash.phash(pil),
+                    "image": pil
+                })
+            except:
+                pass
+    return images
 
+#image filtering and matching
 
-#File upload//
+def exclude_template_images(images, template_hashes, threshold=8):
+    if not template_hashes:
+        return images
+    clean = []
+    for img in images:
+        if all(img["hash"] - th > threshold for th in template_hashes):
+            clean.append(img)
+    return clean
 
-st.sidebar.header(f"Upload a {doc_type} to check")
-uploaded_file = st.sidebar.file_uploader(f"Upload {doc_type} file", type=[doc_type.lower()])
-save_to_folder = st.sidebar.checkbox(f"Save uploaded {doc_type} to folder?")
+def match_images(images1, images2, threshold=8):
+    matches = []
+    used = set()
 
-uploaded_text = ""
-uploaded_name = None
-if uploaded_file:
-    uploaded_name = uploaded_file.name
-    tmp_path = os.path.join(tempfile.gettempdir(), uploaded_file.name)
-    with open(tmp_path, "wb") as f:
-        f.write(uploaded_file.read())
-    st.sidebar.success(f"Saved uploaded file temporarily to {tmp_path}")
-    uploaded_text = extract_text(tmp_path, doc_type)
+    for i, a in enumerate(images1):
+        for j, b in enumerate(images2):
+            if j in used:
+                continue
+            if a["hash"] - b["hash"] <= threshold:
+                matches.append((a["image"], b["image"]))
+                used.add(j)
+                break
+    return matches
 
-    if save_to_folder:
-        if not os.path.exists(directory):
-            os.makedirs(directory, exist_ok=True)
-        dest_path = os.path.join(directory, uploaded_file.name)
-        with open(dest_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        st.sidebar.success(f"Uploaded file saved to folder: {dest_path}")
-        #Rescan folder after saving//
-        doc_data = scan_folder(directory, doc_type)
-        st.session_state["doc_data"] = doc_data
+#text similarity
 
-#Document comparison//
+def text_similarity(t1, t2):
+    s1, s2 = split_sentences(t1), split_sentences(t2)
+    if not s1 or not s2:
+        return {}, {}, 0.0
 
-if uploaded_file and uploaded_text.strip() and len(doc_data) > 0:
-    st.header("🔗 Document-level similarity")
+    vec = TfidfVectorizer(stop_words="english")
+    tfidf = vec.fit_transform(s1 + s2)
 
-    corpus_texts = [d["text"] for d in doc_data]
-    corpus_names = [os.path.basename(d["path"]) for d in doc_data]
+    sim = cosine_similarity(tfidf[:len(s1)], tfidf[len(s1):])
+    scores1 = {s1[i]: float(sim[i].max()) for i in range(len(s1))}
+    scores2 = {s2[j]: float(sim[:, j].max()) for j in range(len(s2))}
+    return scores1, scores2, float(np.mean(list(scores1.values())))
 
-    vectorizer = TfidfVectorizer(stop_words="english", max_df=0.95)
-    docs = [uploaded_text] + corpus_texts
-    try:
-        tfidf = vectorizer.fit_transform(docs)
-    except ValueError:
-        st.error("Not enough text to compare. Check your documents.")
-        st.stop()
+#streamlit ui
 
-    cosine_with_uploaded = cosine_similarity(tfidf[0:1], tfidf[1:]).flatten()
-    df_scores = pd.DataFrame({
-        "filename": corpus_names,
-        "similarity": cosine_with_uploaded
-    }).sort_values("similarity", ascending=False).reset_index(drop=True)
+st.set_page_config("Plagiarism Checker", layout="wide")
+st.title("Plagiarism Checker (PDF + DOCX)")
 
-    st.dataframe(df_scores.head(top_n).style.format({"similarity":"{:.4f}"}))
+st.sidebar.header("Upload")
+file_type = st.sidebar.selectbox("Document Type", ["PDF", "DOCX"])
+zips = st.sidebar.file_uploader("Upload ZIP files", type=["zip"], accept_multiple_files=True)
+template_file = st.sidebar.file_uploader("Template File (exclude text & images)",
+    type=["pdf"] if file_type == "PDF" else ["docx"]
+)
+threshold = st.sidebar.slider("Text highlight threshold (%)", 30, 90, 55) / 100
 
-    #Sentence-level comparison//
-    for idx in range(min(top_n, len(df_scores))):
-        top_name = df_scores.loc[idx, "filename"]
-        top_score = df_scores.loc[idx, "similarity"]
-        st.subheader(f"Top {idx+1} match: {top_name} — score {top_score:.3f}")
+tmp = tempfile.mkdtemp()
 
-        top_text = next((d["text"] for d in doc_data if os.path.basename(d["path"]) == top_name), "")
+#template
 
-        uploaded_sentences = split_into_sentences(uploaded_text)
-        top_sentences = split_into_sentences(top_text)
+template_text = ""
+template_image_hashes = []
 
-        if uploaded_sentences and top_sentences:
-            sent_docs = uploaded_sentences + top_sentences
-            sent_vectorizer = TfidfVectorizer(stop_words="english", max_df=0.95)
-            sent_tfidf = sent_vectorizer.fit_transform(sent_docs)
+if template_file:
+    tpath = os.path.join(tmp, template_file.name)
+    with open(tpath, "wb") as f:
+        f.write(template_file.read())
 
-            m = len(uploaded_sentences)
-            uploaded_mat = sent_tfidf[:m]
-            top_mat = sent_tfidf[m:]
+    if file_type == "PDF":
+        template_text = extract_text_from_pdf(tpath)
+        imgs = extract_images_from_pdf(tpath)
+    else:
+        d = docx.Document(tpath)
+        template_text = " ".join(p.text for p in d.paragraphs)
+        imgs = extract_images_from_docx(tpath)
 
-            sent_cosine = cosine_similarity(uploaded_mat, top_mat)
+    template_image_hashes = [i["hash"] for i in imgs]
 
-            best_matches = {uploaded_sentences[i]: float(sent_cosine[i].argmax()) for i in range(m)}
-            top_doc_scores = {top_sentences[j]: float(sent_cosine[:, j].max()) for j in range(len(top_sentences))}
+#zipfile extraction
 
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Uploaded document**")
-                html_left = render_highlighted_html(uploaded_text, best_matches, sentence_threshold)
-                st.markdown(html_left, unsafe_allow_html=True)
-            with col2:
-                st.markdown(f"**{top_name} (folder)**")
-                html_right = render_highlighted_html(top_text, top_doc_scores, sentence_threshold)
-                st.markdown(html_right, unsafe_allow_html=True)
+for z in zips:
+    zp = os.path.join(tmp, z.name)
+    with open(zp, "wb") as f:
+        f.write(z.read())
+    with zipfile.ZipFile(zp) as zr:
+        zr.extractall(tmp)
+
+#load documents
+
+docs = []
+
+for root, _, files in os.walk(tmp):
+    for f in files:
+        if file_type == "PDF" and f.lower().endswith(".pdf"):
+            path = os.path.join(root, f)
+            text = extract_text_from_pdf(path)
+            images = extract_images_from_pdf(path)
+
+        elif file_type == "DOCX" and f.lower().endswith(".docx"):
+            path = os.path.join(root, f)
+            d = docx.Document(path)
+            text = " ".join(p.text for p in d.paragraphs)
+            images = extract_images_from_docx(path)
         else:
-            st.info("Not enough sentences for sentence-level comparison.")
-else:
-    st.info(f"Upload a {doc_type} to compare against scanned folder documents.")
+            continue
+
+        if template_file and f == template_file.name:
+            continue
+
+        text = remove_template_text(text, template_text)
+        images = exclude_template_images(images, template_image_hashes)
+
+        docs.append({
+            "name": f,
+            "text": text,
+            "images": images
+        })
+
+st.write(f"📂 Documents loaded: {len(docs)}")
+if len(docs) < 2:
+    st.stop()
+
+#comparison
+
+rows = []
+
+for i in range(len(docs)):
+    for j in range(i+1, len(docs)):
+        A, B = docs[i], docs[j]
+
+        s1, s2, text_sim = text_similarity(A["text"], B["text"])
+        img_matches = match_images(A["images"], B["images"])
+
+        img_sim = len(img_matches) / max(1, min(len(A["images"]), len(B["images"])))
+        combined = 0.6 * text_sim + 0.4 * img_sim
+
+        rows.append({
+            "File 1": A["name"],
+            "File 2": B["name"],
+            "Text %": round(text_sim * 100, 2),
+            "Image %": round(img_sim * 100, 2),
+            "Combined %": round(combined * 100, 2),
+            "scores1": s1,
+            "scores2": s2,
+            "images": img_matches
+        })
+
+df = pd.DataFrame(rows).sort_values("Combined %", ascending=False)
+
+st.subheader("📊 Similarity Results")
+st.dataframe(df[["File 1","File 2","Text %","Image %","Combined %"]])
+
+#detailed description of matched text/images
+
+for _, r in df.iterrows():
+    st.markdown(f"## {r['File 1']} ↔ {r['File 2']}")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Text – File 1**")
+        st.markdown(
+            highlight_html(
+                next(d["text"] for d in docs if d["name"] == r["File 1"]),
+                r["scores1"], threshold
+            ),
+            unsafe_allow_html=True
+        )
+
+    with c2:
+        st.markdown("**Text – File 2**")
+        st.markdown(
+            highlight_html(
+                next(d["text"] for d in docs if d["name"] == r["File 2"]),
+                r["scores2"], threshold
+            ),
+            unsafe_allow_html=True
+        )
+
+    if r["images"]:
+        st.markdown("### 🖼️ Matched Images")
+        for a, b in r["images"]:
+            i1, i2 = st.columns(2)
+            i1.image(a, use_container_width=True)
+            i2.image(b, use_container_width=True)
+    else:
+        st.info("No non-template images matched.")
